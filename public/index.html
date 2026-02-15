@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Imposter Online</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>Imposter Online</h1>
+
+    <div id="screen-home" class="card">
+      <input id="name" placeholder="Your name" maxlength="20" />
+      <div class="row">
+        <button id="btn-create">Create Room</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <input id="code" placeholder="Room code (ABCD)" maxlength="4" />
+      <div class="row">
+        <button id="btn-join">Join Room</button>
+      </div>
+
+      <p id="home-msg" class="msg"></p>
+    </div>
+
+    <div id="screen-room" class="card hidden">
+      <div class="top">
+        <div>
+          <div class="label">Room</div>
+          <div id="room-code" class="roomcode">----</div>
+        </div>
+        <button id="btn-leave" class="ghost">Leave</button>
+      </div>
+
+      <div class="label">Players</div>
+      <div id="players" class="players"></div>
+
+      <div class="row">
+        <button id="btn-start" class="hidden">Start Game (Host)</button>
+      </div>
+
+      <p id="room-msg" class="msg"></p>
+    </div>
+
+    <div id="screen-role" class="card hidden">
+      <div class="label">Your Role</div>
+      <div id="role" class="big">---</div>
+      <div id="word-box" class="word hidden">
+        <div class="label">Secret Word</div>
+        <div id="word" class="big">---</div>
+      </div>
+      <p class="msg">Don’t say your role out loud. Keep it lowkey 😭</p>
+      <button id="btn-back" class="ghost">Back to Lobby</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
+
