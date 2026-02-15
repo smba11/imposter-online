@@ -13,5 +13,13 @@
   "dependencies": {
     "express": "^5.2.1",
     "socket.io": "^4.8.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smba11/imposter-online.git"
+  },
+  "bugs": {
+    "url": "https://github.com/smba11/imposter-online/issues"
+  },
+  "homepage": "https://github.com/smba11/imposter-online#readme"
 }
