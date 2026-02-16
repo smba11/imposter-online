@@ -1,4 +1,5 @@
 // public/client.js
+console.log("CLIENT VERSION: v2 rounds + voting loaded");
 const socket = io();
 const $ = (id) => document.getElementById(id);
 
