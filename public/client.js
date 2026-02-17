@@ -1,10 +1,8 @@
 // public/client.js
-console.log("CLIENT VERSION: v2 rounds + voting loaded");
+console.log("CLIENT VERSION: v3 manual phases loaded");
+
 const socket = io();
 const $ = (id) => document.getElementById(id);
-
-let mySocketId = null;
-socket.on("connect", () => (mySocketId = socket.id));
 
 /** Rejoin identity */
 function getPlayerKey() {
@@ -19,25 +17,16 @@ const playerKey = getPlayerKey();
 
 let currentRoom = null;
 let lastState = null;
-let myRole = null; // { role, word, round }
 
-/** Screens */
 const screens = {
   home: $("screen-home"),
   room: $("screen-room"),
   role: $("screen-role"),
 };
+
 function show(screenName) {
   for (const k of Object.keys(screens)) screens[k].classList.add("hidden");
   screens[screenName].classList.remove("hidden");
-}
-
-/** Small helpers */
-function msToClock(ms) {
-  const s = Math.ceil(ms / 1000);
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${String(r).padStart(2, "0")}`;
 }
 
 /** Home actions */
@@ -45,16 +34,12 @@ $("btn-create").onclick = () => {
   const name = $("name").value.trim();
   $("home-msg").textContent = "";
 
-  socket.emit(
-    "room:joinOrCreate",
-    { create: true, name, playerKey },
-    (res) => {
-      if (!res?.ok) return ($("home-msg").textContent = res?.error || "Failed.");
-      currentRoom = res.roomCode;
-      $("room-code").textContent = currentRoom;
-      show("room");
-    }
-  );
+  socket.emit("room:joinOrCreate", { create: true, name, playerKey }, (res) => {
+    if (!res?.ok) return ($("home-msg").textContent = res?.error || "Failed.");
+    currentRoom = res.roomCode;
+    $("room-code").textContent = currentRoom;
+    show("room");
+  });
 };
 
 $("btn-join").onclick = () => {
@@ -62,76 +47,114 @@ $("btn-join").onclick = () => {
   const roomCode = $("code").value.trim();
   $("home-msg").textContent = "";
 
-  socket.emit(
-    "room:joinOrCreate",
-    { create: false, roomCode, name, playerKey },
-    (res) => {
-      if (!res?.ok) return ($("home-msg").textContent = res?.error || "Failed.");
-      currentRoom = res.roomCode;
-      $("room-code").textContent = currentRoom;
-      show("room");
-    }
-  );
+  socket.emit("room:joinOrCreate", { create: false, roomCode, name, playerKey }, (res) => {
+    if (!res?.ok) return ($("home-msg").textContent = res?.error || "Failed.");
+    currentRoom = res.roomCode;
+    $("room-code").textContent = currentRoom;
+    show("room");
+  });
 };
 
 $("btn-leave").onclick = () => {
   if (currentRoom) socket.emit("room:leave", { roomCode: currentRoom, playerKey });
   currentRoom = null;
   lastState = null;
-  myRole = null;
   $("players").innerHTML = "";
   $("room-msg").textContent = "";
   $("home-msg").textContent = "";
-  // clear vote area if you add it later
   show("home");
-};
-
-$("btn-start").onclick = () => {
-  $("room-msg").textContent = "";
-  socket.emit("game:start", { roomCode: currentRoom, playerKey }, (res) => {
-    if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn’t start.";
-  });
 };
 
 $("btn-back").onclick = () => show("room");
 
-/** Optional: quick copy room link UX */
+/** Host button is dynamic now */
+function setHostButton(text, onClick) {
+  const btn = $("btn-start");
+  btn.textContent = text;
+  btn.onclick = onClick;
+  btn.classList.remove("hidden");
+}
+
+function hideHostButton() {
+  $("btn-start").classList.add("hidden");
+}
+
+function phaseLabel(phase) {
+  return (
+    phase === "lobby" ? "Lobby" :
+    phase === "role" ? "Role Reveal" :
+    phase === "discuss" ? "Discussion" :
+    phase === "vote" ? "Voting" :
+    phase === "results" ? "Results" : phase
+  );
+}
+
 function roomShareLink(code) {
   return `${location.origin}?room=${code}`;
 }
 
-/** Room UI rendering */
 function renderRoom(state) {
   lastState = state;
 
-  // Host start button visibility
   const amHost = state.hostKey === playerKey;
-  $("btn-start").classList.toggle("hidden", !(amHost && state.phase === "lobby"));
 
-  // Phase/timer message (light UX without changing HTML yet)
-  const phaseLabel =
-    state.phase === "lobby" ? "Lobby" :
-    state.phase === "role" ? "Role Reveal" :
-    state.phase === "discuss" ? "Discussion" :
-    state.phase === "vote" ? "Voting" :
-    state.phase === "results" ? "Results" : state.phase;
-
-  let timerText = "";
-  if (state.timer?.remainingMs != null) {
-    timerText = ` • ${msToClock(state.timer.remainingMs)}`;
+  // message area
+  if (state.phase === "lobby") {
+    $("room-msg").textContent = `Share link: ${roomShareLink(state.roomCode)}`;
+  } else {
+    $("room-msg").textContent = `Round ${state.round} • Phase: ${phaseLabel(state.phase)}`;
   }
 
-  $("room-msg").textContent =
-    state.phase === "lobby"
-      ? `Share link: ${roomShareLink(state.roomCode)}`
-      : `Phase: ${phaseLabel}${timerText}`;
+  // host controls
+  if (amHost) {
+    if (state.phase === "lobby") {
+      setHostButton("Start Game (Host)", () => {
+        $("room-msg").textContent = "";
+        socket.emit("game:start", { roomCode: state.roomCode, playerKey }, (res) => {
+          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn’t start.";
+        });
+      });
+    } else if (state.phase === "role") {
+      setHostButton("Go to Discussion", () => {
+        socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "discuss" }, (res) => {
+          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't change phase.";
+        });
+      });
+    } else if (state.phase === "discuss") {
+      setHostButton("Go to Voting", () => {
+        socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "vote" }, (res) => {
+          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't change phase.";
+        });
+      });
+    } else if (state.phase === "vote") {
+      setHostButton("Show Results", () => {
+        socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "results" }, (res) => {
+          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't show results.";
+        });
+      });
+    } else if (state.phase === "results") {
+      setHostButton("Next Round", () => {
+        socket.emit("round:next", { roomCode: state.roomCode, playerKey }, (res) => {
+          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't next round.";
+        });
+      });
+    } else {
+      hideHostButton();
+    }
+  } else {
+    hideHostButton();
+  }
 
-  // Render players as clickable cards during vote phase (UX)
+  // render players (click to vote during vote phase)
   $("players").innerHTML = "";
+
+  const me = state.players.find(p => p.key === playerKey);
+  const iAmEliminated = !!me?.eliminated;
+
   for (const p of state.players) {
-    const div = document.createElement("button");
-    div.type = "button";
-    div.className = "player";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "player";
 
     const tags = [];
     if (p.key === state.hostKey) tags.push("host");
@@ -139,28 +162,30 @@ function renderRoom(state) {
     if (p.eliminated) tags.push("out");
     if (p.key === playerKey) tags.push("you");
 
-    div.textContent = `${p.name}${tags.length ? " • " + tags.join(", ") : ""}`;
+    btn.textContent = `${p.name}${tags.length ? " • " + tags.join(", ") : ""}`;
 
     const canVote =
       state.phase === "vote" &&
+      !iAmEliminated &&
       !p.eliminated &&
-      p.key !== playerKey &&
-      !state.players.find(x => x.key === playerKey)?.eliminated;
+      p.key !== playerKey;
 
-    // During vote phase, clicking casts vote
     if (canVote) {
-      div.style.cursor = "pointer";
-      div.onclick = () => {
-        socket.emit("vote:cast", { roomCode: state.roomCode, playerKey, targetKey: p.key }, (res) => {
-          if (!res?.ok) $("room-msg").textContent = res?.error || "Vote failed.";
-          else $("room-msg").textContent = `Voted for ${p.name}.`;
-        });
+      btn.onclick = () => {
+        socket.emit(
+          "vote:cast",
+          { roomCode: state.roomCode, playerKey, targetKey: p.key },
+          (res) => {
+            if (!res?.ok) $("room-msg").textContent = res?.error || "Vote failed.";
+            else $("room-msg").textContent = `Voted for ${p.name}.`;
+          }
+        );
       };
     } else {
-      div.onclick = null;
+      btn.onclick = null;
     }
 
-    $("players").appendChild(div);
+    $("players").appendChild(btn);
   }
 }
 
@@ -172,12 +197,10 @@ socket.on("room:update", (state) => {
   currentRoom = state.roomCode;
   $("room-code").textContent = state.roomCode;
   renderRoom(state);
-
-  // If role reveal phase starts, user will get game:role too
+  show("room");
 });
 
 socket.on("game:role", ({ role, word, round }) => {
-  myRole = { role, word, round };
   $("role").textContent = role;
   if (word) {
     $("word").textContent = word;
@@ -190,15 +213,13 @@ socket.on("game:role", ({ role, word, round }) => {
 });
 
 socket.on("vote:status", ({ votedCount, total }) => {
-  // simple UX feedback in msg line
   if (!lastState) return;
   if (lastState.phase === "vote") {
-    $("room-msg").textContent = `Voting: ${votedCount}/${total} votes in • ${$("room-msg").textContent.split("•").pop().trim()}`;
+    $("room-msg").textContent = `Round ${lastState.round} • Voting • ${votedCount}/${total} votes in`;
   }
 });
 
 socket.on("game:results", ({ eliminated, win }) => {
-  // quick results feedback
   if (eliminated) {
     const roleTxt = eliminated.wasImposter ? "IMPOSTER" : "CREW";
     $("room-msg").textContent = `${eliminated.name} was voted out (${roleTxt}).`;
@@ -207,11 +228,8 @@ socket.on("game:results", ({ eliminated, win }) => {
   }
 
   if (win?.winner) {
-    $("room-msg").textContent += `  Winner: ${win.winner}.`;
+    $("room-msg").textContent += ` Winner: ${win.winner}.`;
   }
-
-  // stay on room screen; role screen can be reopened manually
-  show("room");
 });
 
 /** Auto-fill room code from URL (?room=ABCD) */
@@ -220,5 +238,3 @@ socket.on("game:results", ({ eliminated, win }) => {
   const code = params.get("room");
   if (code) $("code").value = code.toUpperCase().slice(0, 4);
 })();
-
-
