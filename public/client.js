@@ -1,10 +1,20 @@
 // public/client.js
-console.log("CLIENT VERSION: v3 manual phases loaded");
+console.log("CLIENT VERSION: perfect spec loaded");
 
 const socket = io();
 const $ = (id) => document.getElementById(id);
 
-/** Rejoin identity */
+function phaseLabel(phase) {
+  return (
+    phase === "lobby" ? "Lobby" :
+    phase === "role" ? "Role Reveal" :
+    phase === "discuss" ? "Discussion" :
+    phase === "vote" ? "Voting" :
+    phase === "results" ? "Results" : phase
+  );
+}
+
+// Rejoin identity
 function getPlayerKey() {
   let k = localStorage.getItem("playerKey");
   if (!k) {
@@ -17,19 +27,71 @@ const playerKey = getPlayerKey();
 
 let currentRoom = null;
 let lastState = null;
+let lastRolePayload = null;
 
+// Connection badge
+socket.on("connect", () => {
+  $("conn").textContent = "Online";
+  $("conn").classList.remove("bad");
+});
+socket.on("disconnect", () => {
+  $("conn").textContent = "Offline";
+  $("conn").classList.add("bad");
+});
+
+// Screens
 const screens = {
   home: $("screen-home"),
   room: $("screen-room"),
-  role: $("screen-role"),
 };
-
 function show(screenName) {
   for (const k of Object.keys(screens)) screens[k].classList.add("hidden");
   screens[screenName].classList.remove("hidden");
 }
 
-/** Home actions */
+// Toast
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.remove("hidden");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add("hidden"), 3500);
+}
+
+// Role reveal overlay
+function openReveal(rolePayload) {
+  lastRolePayload = rolePayload;
+
+  $("reveal").classList.remove("hidden");
+  $("revealTap").classList.remove("hidden");
+  $("revealInfo").classList.add("hidden");
+
+  $("revealRole").textContent = rolePayload.role;
+
+  if (rolePayload.word) {
+    $("revealWordWrap").classList.remove("hidden");
+    $("revealWord").textContent = rolePayload.word;
+  } else {
+    $("revealWordWrap").classList.add("hidden");
+    $("revealWord").textContent = "";
+  }
+}
+
+$("revealTap").onclick = () => {
+  $("revealTap").classList.add("hidden");
+  $("revealInfo").classList.remove("hidden");
+
+  // color vibe
+  const r = lastRolePayload?.role;
+  $("revealRole").classList.toggle("imposter", r === "IMPOSTER");
+};
+
+$("btn-closeReveal").onclick = () => {
+  $("reveal").classList.add("hidden");
+};
+
+// Join/create actions
 $("btn-create").onclick = () => {
   const name = $("name").value.trim();
   $("home-msg").textContent = "";
@@ -60,179 +122,201 @@ $("btn-leave").onclick = () => {
   currentRoom = null;
   lastState = null;
   $("players").innerHTML = "";
-  $("room-msg").textContent = "";
-  $("home-msg").textContent = "";
+  $("order").innerHTML = "";
+  $("voteTargets").innerHTML = "";
+  $("votePanel").classList.add("hidden");
   show("home");
 };
 
-$("btn-back").onclick = () => show("room");
+$("btn-copy").onclick = async () => {
+  if (!currentRoom) return;
+  const link = `${location.origin}?room=${currentRoom}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Room link copied ✅");
+  } catch {
+    toast("Couldn’t copy link (browser blocked)");
+  }
+};
 
-/** Host button is dynamic now */
-function setHostButton(text, onClick) {
-  const btn = $("btn-start");
-  btn.textContent = text;
-  btn.onclick = onClick;
-  btn.classList.remove("hidden");
-}
+// Voting UI
+$("btn-skip").onclick = () => {
+  if (!lastState || lastState.phase !== "vote") return;
+  socket.emit("vote:cast", { roomCode: lastState.roomCode, playerKey, targetKey: "SKIP" }, (res) => {
+    if (!res?.ok) toast(res?.error || "Skip failed");
+    else toast("You skipped.");
+  });
+};
 
-function hideHostButton() {
-  $("btn-start").classList.add("hidden");
-}
-
-function phaseLabel(phase) {
-  return (
-    phase === "lobby" ? "Lobby" :
-    phase === "role" ? "Role Reveal" :
-    phase === "discuss" ? "Discussion" :
-    phase === "vote" ? "Voting" :
-    phase === "results" ? "Results" : phase
-  );
-}
-
-function roomShareLink(code) {
-  return `${location.origin}?room=${code}`;
-}
-
-function renderRoom(state) {
+function render(state) {
   lastState = state;
 
+  $("room-code").textContent = state.roomCode;
+  $("round").textContent = String(state.round || 0);
+  $("phase").textContent = phaseLabel(state.phase);
+
+  // Host controls
   const amHost = state.hostKey === playerKey;
+  $("btn-host").classList.toggle("hidden", !amHost);
+  $("btn-end").classList.toggle("hidden", !(amHost && state.phase !== "lobby"));
 
-  // message area
-  if (state.phase === "lobby") {
-    $("room-msg").textContent = `Share link: ${roomShareLink(state.roomCode)}`;
-  } else {
-    $("room-msg").textContent = `Round ${state.round} • Phase: ${phaseLabel(state.phase)}`;
-  }
+  $("btn-end").onclick = () => {
+    socket.emit("game:end", { roomCode: state.roomCode, playerKey }, (res) => {
+      if (!res?.ok) toast(res?.error || "Couldn’t end.");
+    });
+  };
 
-  // host controls
+  const hostBtn = $("btn-host");
+  hostBtn.onclick = null;
+
   if (amHost) {
     if (state.phase === "lobby") {
-      setHostButton("Start Game (Host)", () => {
-        $("room-msg").textContent = "";
+      hostBtn.textContent = "Start Game";
+      hostBtn.onclick = () => {
         socket.emit("game:start", { roomCode: state.roomCode, playerKey }, (res) => {
-          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn’t start.";
+          if (!res?.ok) toast(res?.error || "Couldn’t start.");
         });
-      });
+      };
     } else if (state.phase === "role") {
-      setHostButton("Go to Discussion", () => {
-        socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "discuss" }, (res) => {
-          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't change phase.";
-        });
-      });
+      hostBtn.textContent = "Start Discussion";
+      hostBtn.onclick = () => socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "discuss" }, () => {});
     } else if (state.phase === "discuss") {
-      setHostButton("Go to Voting", () => {
-        socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "vote" }, (res) => {
-          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't change phase.";
-        });
-      });
+      hostBtn.textContent = "Start Voting";
+      hostBtn.onclick = () => socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "vote" }, () => {});
     } else if (state.phase === "vote") {
-      setHostButton("Show Results", () => {
-        socket.emit("phase:set", { roomCode: state.roomCode, playerKey, phase: "results" }, (res) => {
-          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't show results.";
-        });
-      });
+      hostBtn.textContent = "Waiting for votes…";
+      hostBtn.onclick = () => toast("Everyone must vote (or skip).");
     } else if (state.phase === "results") {
-      setHostButton("Next Round", () => {
-        socket.emit("round:next", { roomCode: state.roomCode, playerKey }, (res) => {
-          if (!res?.ok) $("room-msg").textContent = res?.error || "Couldn't next round.";
-        });
+      hostBtn.textContent = "Next Round";
+      hostBtn.onclick = () => socket.emit("round:next", { roomCode: state.roomCode, playerKey }, (res) => {
+        if (!res?.ok) toast(res?.error || "Couldn’t next round.");
       });
     } else {
-      hideHostButton();
+      hostBtn.textContent = "Host";
     }
-  } else {
-    hideHostButton();
   }
 
-  // render players (click to vote during vote phase)
+  // Players list
   $("players").innerHTML = "";
-
-  const me = state.players.find(p => p.key === playerKey);
-  const iAmEliminated = !!me?.eliminated;
-
   for (const p of state.players) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "player";
+    const div = document.createElement("div");
+    div.className = "playerRow";
+
+    const name = document.createElement("div");
+    name.className = "pName";
+    name.textContent = p.name;
+
+    const meta = document.createElement("div");
+    meta.className = "pMeta";
 
     const tags = [];
-    if (p.key === state.hostKey) tags.push("host");
-    if (!p.connected) tags.push("offline");
-    if (p.eliminated) tags.push("out");
-    if (p.key === playerKey) tags.push("you");
+    if (p.key === state.hostKey) tags.push("Host");
+    if (p.key === playerKey) tags.push("You");
+    if (!p.connected) tags.push("Offline");
+    if (p.eliminated) tags.push("Eliminated");
+    meta.textContent = tags.join(" • ");
 
-    btn.textContent = `${p.name}${tags.length ? " • " + tags.join(", ") : ""}`;
+    div.appendChild(name);
+    div.appendChild(meta);
 
-    const canVote =
-      state.phase === "vote" &&
-      !iAmEliminated &&
-      !p.eliminated &&
-      p.key !== playerKey;
+    $("players").appendChild(div);
+  }
 
-    if (canVote) {
-      btn.onclick = () => {
-        socket.emit(
-          "vote:cast",
-          { roomCode: state.roomCode, playerKey, targetKey: p.key },
-          (res) => {
-            if (!res?.ok) $("room-msg").textContent = res?.error || "Vote failed.";
-            else $("room-msg").textContent = `Voted for ${p.name}.`;
-          }
-        );
-      };
-    } else {
-      btn.onclick = null;
+  // Speaking order
+  $("order").innerHTML = "";
+  for (const o of state.order || []) {
+    const row = document.createElement("div");
+    row.className = "orderRow";
+
+    const left = document.createElement("div");
+    left.textContent = o.name;
+
+    const right = document.createElement("div");
+    right.className = "orderMeta";
+    const badges = [];
+    if (o.key === state.currentSpeakerKey) badges.push("Speaking");
+    if (o.eliminated) badges.push("Out");
+    if (!o.connected) badges.push("Offline");
+    right.textContent = badges.join(" • ");
+
+    if (o.key === state.currentSpeakerKey) row.classList.add("active");
+    if (o.eliminated) row.classList.add("out");
+
+    row.appendChild(left);
+    row.appendChild(right);
+    $("order").appendChild(row);
+  }
+
+  // Vote panel
+  if (state.phase === "vote") {
+    $("votePanel").classList.remove("hidden");
+
+    const me = state.players.find(p => p.key === playerKey);
+    const iAmOut = !!me?.eliminated;
+
+    // status
+    const vs = state.voteStatus || { votedCount: 0, total: 0 };
+    $("voteStatus").textContent = `${vs.votedCount}/${vs.total} voted`;
+    if (amHost) {
+      $("btn-host").textContent = vs.votedCount === vs.total ? "Votes complete…" : "Waiting for votes…";
     }
 
-    $("players").appendChild(btn);
+    // targets
+    $("voteTargets").innerHTML = "";
+    for (const p of state.players) {
+      if (p.eliminated) continue;
+      if (p.key === playerKey) continue;
+
+      const btn = document.createElement("button");
+      btn.className = "voteBtn";
+      btn.textContent = `Vote ${p.name}`;
+      btn.disabled = iAmOut;
+
+      btn.onclick = () => {
+        socket.emit("vote:cast", { roomCode: state.roomCode, playerKey, targetKey: p.key }, (res) => {
+          if (!res?.ok) toast(res?.error || "Vote failed");
+          else toast(`Voted: ${p.name}`);
+        });
+      };
+
+      $("voteTargets").appendChild(btn);
+    }
+
+    $("btn-skip").disabled = iAmOut;
+  } else {
+    $("votePanel").classList.add("hidden");
   }
 }
 
-/** Socket events */
 socket.on("room:update", (state) => {
   if (!state?.roomCode) return;
   if (currentRoom && state.roomCode !== currentRoom) return;
-
   currentRoom = state.roomCode;
-  $("room-code").textContent = state.roomCode;
-  renderRoom(state);
   show("room");
+  render(state);
 });
 
+// Among Us style role reveal on every role packet
 socket.on("game:role", ({ role, word, round }) => {
-  $("role").textContent = role;
-  if (word) {
-    $("word").textContent = word;
-    $("word-box").classList.remove("hidden");
-  } else {
-    $("word").textContent = "";
-    $("word-box").classList.add("hidden");
+  // Only show if we’re in game (not lobby)
+  openReveal({ role, word, round });
+});
+
+socket.on("game:results", ({ eliminated, tieOrNoElim, win }) => {
+  if (eliminated) {
+    toast(`${eliminated.name} was eliminated (${eliminated.wasImposter ? "IMPOSTER" : "CREW"}).`);
+  } else if (tieOrNoElim) {
+    toast("Tie / no elimination — next round.");
   }
-  show("role");
+  if (win?.winner) toast(`WINNER: ${win.winner}`);
 });
 
 socket.on("vote:status", ({ votedCount, total }) => {
-  if (!lastState) return;
-  if (lastState.phase === "vote") {
-    $("room-msg").textContent = `Round ${lastState.round} • Voting • ${votedCount}/${total} votes in`;
-  }
+  if (!lastState || lastState.phase !== "vote") return;
+  $("voteStatus").textContent = `${votedCount}/${total} voted`;
 });
 
-socket.on("game:results", ({ eliminated, win }) => {
-  if (eliminated) {
-    const roleTxt = eliminated.wasImposter ? "IMPOSTER" : "CREW";
-    $("room-msg").textContent = `${eliminated.name} was voted out (${roleTxt}).`;
-  } else {
-    $("room-msg").textContent = `No one eliminated (tie / no votes).`;
-  }
-
-  if (win?.winner) {
-    $("room-msg").textContent += ` Winner: ${win.winner}.`;
-  }
-});
-
-/** Auto-fill room code from URL (?room=ABCD) */
+// Autofill room code from link
 (function bootstrapRoomFromUrl() {
   const params = new URLSearchParams(location.search);
   const code = params.get("room");
