@@ -7,58 +7,118 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div class="bg"></div>
+
   <div class="wrap">
-    <h1>Imposter Online</h1>
-
-    <div id="screen-home" class="card">
-      <input id="name" placeholder="Your name" maxlength="20" />
-      <div class="row">
-        <button id="btn-create">Create Room</button>
+    <header class="header">
+      <div class="brand">
+        <div class="logoDot"></div>
+        <div>
+          <div class="title">Imposter Online</div>
+          <div class="subtitle">Call-friendly • synced phases • real-time voting</div>
+        </div>
       </div>
+      <div id="conn" class="conn">Connecting…</div>
+    </header>
 
-      <div class="divider"></div>
+    <!-- HOME -->
+    <section id="screen-home" class="card">
+      <div class="grid">
+        <div>
+          <label class="label">Your name</label>
+          <input id="name" placeholder="Aman" maxlength="20" />
+          <button id="btn-create" class="btn primary">Create Room</button>
+        </div>
 
-      <input id="code" placeholder="Room code (ABCD)" maxlength="4" />
-      <div class="row">
-        <button id="btn-join">Join Room</button>
+        <div class="divider"></div>
+
+        <div>
+          <label class="label">Join with code</label>
+          <input id="code" placeholder="ABCD" maxlength="4" />
+          <button id="btn-join" class="btn">Join Room</button>
+        </div>
       </div>
-
       <p id="home-msg" class="msg"></p>
-    </div>
+      <p class="hint">Tip: testing multiple players on one PC? Use Incognito or another browser.</p>
+    </section>
 
-    <div id="screen-room" class="card hidden">
-      <div class="top">
+    <!-- ROOM -->
+    <section id="screen-room" class="card hidden">
+      <div class="topRow">
         <div>
           <div class="label">Room</div>
-          <div id="room-code" class="roomcode">----</div>
+          <div id="room-code" class="roomCode">----</div>
         </div>
-        <button id="btn-leave" class="ghost">Leave</button>
+
+        <div class="topButtons">
+          <button id="btn-copy" class="btn small">Copy Link</button>
+          <button id="btn-leave" class="btn small ghost">Leave</button>
+        </div>
       </div>
 
-      <div class="label">Players</div>
-      <div id="players" class="players"></div>
-
-      <div class="row">
-        <button id="btn-start" class="hidden">Start Game (Host)</button>
+      <div class="phaseBar">
+        <div class="phaseLeft">
+          <div class="label">Round</div>
+          <div id="round" class="phaseBig">0</div>
+        </div>
+        <div class="phaseMid">
+          <div class="label">Phase</div>
+          <div id="phase" class="phaseBig">Lobby</div>
+          <div id="room-msg" class="msg"></div>
+        </div>
+        <div class="phaseRight">
+          <button id="btn-host" class="btn primary hidden">Host Action</button>
+          <button id="btn-end" class="btn danger hidden">End Game</button>
+        </div>
       </div>
 
-      <p id="room-msg" class="msg"></p>
-    </div>
+      <div class="twoCol">
+        <div>
+          <div class="sectionTitle">Players</div>
+          <div id="players" class="players"></div>
+        </div>
 
-    <div id="screen-role" class="card hidden">
-      <div class="label">Your Role</div>
-      <div id="role" class="big">---</div>
-      <div id="word-box" class="word hidden">
-        <div class="label">Secret Word</div>
-        <div id="word" class="big">---</div>
+        <div>
+          <div class="sectionTitle">Speaking Order</div>
+          <div id="order" class="order"></div>
+
+          <div id="votePanel" class="votePanel hidden">
+            <div class="sectionTitle">Vote</div>
+            <div id="voteStatus" class="voteStatus">0/0 voted</div>
+            <div id="voteTargets" class="voteTargets"></div>
+            <button id="btn-skip" class="btn ghost">Skip Vote</button>
+          </div>
+        </div>
       </div>
-      <p class="msg">Don’t say your role out loud. Keep it lowkey 😭</p>
-      <button id="btn-back" class="ghost">Back to Lobby</button>
+    </section>
+  </div>
+
+  <!-- ROLE REVEAL OVERLAY (Among Us-ish) -->
+  <div id="reveal" class="reveal hidden">
+    <div class="revealCard">
+      <div id="revealTap" class="revealTap">
+        <div class="auLogo">
+          <div class="auGlass"></div>
+          <div class="auBody"></div>
+        </div>
+        <div class="tapText">Tap to reveal</div>
+      </div>
+
+      <div id="revealInfo" class="revealInfo hidden">
+        <div id="revealRole" class="revealRole">CREW</div>
+        <div id="revealWordWrap" class="revealWordWrap hidden">
+          <div class="revealLabel">Secret word</div>
+          <div id="revealWord" class="revealWord">—</div>
+        </div>
+        <button id="btn-closeReveal" class="btn primary">Back</button>
+      </div>
     </div>
   </div>
+
+  <!-- RESULTS TOAST -->
+  <div id="toast" class="toast hidden"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="client.js"></script>
 </body>
 </html>
-
