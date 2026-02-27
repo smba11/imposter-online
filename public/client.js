@@ -322,11 +322,9 @@ socket.on("room:update", (state) => {
 });
 
 // Among Us style role reveal on every role packet
-socket.on("game:role", ({ role, word, round }) => {
-  // ✅ Don’t show role overlay unless we’re actually inside a room
+socket.on("game:role", ({ roomCode, role, word, round }) => {
   if (!currentRoom) return;
-
-  // ✅ If we have a state packet, require the correct phase
+  if (roomCode && roomCode !== currentRoom) return;
   if (lastState && lastState.phase !== "role") return;
 
   openReveal({ role, word, round });
