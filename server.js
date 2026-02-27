@@ -151,11 +151,12 @@ function sendRoleToPlayer(roomCode, playerKey) {
   if (r.eliminated.has(playerKey)) return;
 
   const isImp = r.imposters.has(playerKey);
-  io.to(p.socketId).emit("game:role", {
-    role: isImp ? "IMPOSTER" : "CREW",
-    word: isImp ? null : r.word,
-    round: r.round
-  });
+ io.to(p.socketId).emit("game:role", {
+  roomCode, // ✅ add this
+  role: isImp ? "IMPOSTER" : "CREW",
+  word: isImp ? null : r.word,
+  round: r.round
+});
 }
 
 function sendRolesToAll(roomCode) {
@@ -325,10 +326,10 @@ io.on("connection", (socket) => {
       socket.join(code);
       emitRoom(code);
 
-      // if game started and player alive, re-send role so they can tap reveal again
-      if (r.phase !== "lobby" && !r.eliminated.has(key)) {
-        sendRoleToPlayer(code, key);
-      }
+     // ✅ only resend role if the game is currently in role-reveal phase
+if (r.phase === "role" && !r.eliminated.has(key)) {
+  sendRoleToPlayer(code, key);
+}
 
       return cb?.({ ok: true, roomCode: code, rejoined: true });
     }
