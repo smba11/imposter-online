@@ -1,5 +1,6 @@
 // public/client.js
-console.log("CLIENT VERSION: FIXED-2026-02-26-A");
+console.log("CLIENT VERSION: ROLE-ONCE-PER-GAME-2026-02-27");
+
 const socket = io();
 const $ = (id) => document.getElementById(id);
 
@@ -8,6 +9,7 @@ function setText(id, text) {
   const el = $(id);
   if (el) el.textContent = text;
 }
+
 function closeReveal() {
   const overlay = document.getElementById("reveal");
   if (overlay) overlay.classList.add("hidden");
@@ -20,7 +22,6 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeReveal();
   });
-});
 
   // ✅ Click outside the card to close (always gives an escape route)
   const reveal = document.getElementById("reveal");
@@ -29,6 +30,7 @@ window.addEventListener("DOMContentLoaded", () => {
       if (e.target === reveal) closeReveal();
     });
   }
+});
 
 function phaseLabel(phase) {
   return (
@@ -55,11 +57,14 @@ let currentRoom = null;
 let lastState = null;
 let lastRolePayload = null;
 
+// ✅ client-side once-per-game guard (server also enforces)
+let requestedRoleThisGame = false;
+
+// Connection badge
 socket.on("connect", () => {
   setText("conn", "Online");
   $("conn")?.classList.remove("bad");
 });
-
 socket.on("disconnect", () => {
   setText("conn", "Offline");
   $("conn")?.classList.add("bad");
@@ -79,6 +84,7 @@ function show(screenName) {
 let toastTimer = null;
 function toast(msg) {
   const t = $("toast");
+  if (!t) return;
   t.textContent = msg;
   t.classList.remove("hidden");
   if (toastTimer) clearTimeout(toastTimer);
@@ -89,31 +95,36 @@ function toast(msg) {
 function openReveal(rolePayload) {
   lastRolePayload = rolePayload;
 
-  $("reveal").classList.remove("hidden");
-  $("revealTap").classList.remove("hidden");
-  $("revealInfo").classList.add("hidden");
+  $("reveal")?.classList.remove("hidden");
+  $("revealTap")?.classList.remove("hidden");
+  $("revealInfo")?.classList.add("hidden");
 
-  $("revealRole").textContent = rolePayload.role;
+  if ($("revealRole")) $("revealRole").textContent = rolePayload.role;
 
   if (rolePayload.word) {
-    $("revealWordWrap").classList.remove("hidden");
-    $("revealWord").textContent = rolePayload.word;
+    $("revealWordWrap")?.classList.remove("hidden");
+    if ($("revealWord")) $("revealWord").textContent = rolePayload.word;
   } else {
-    $("revealWordWrap").classList.add("hidden");
-    $("revealWord").textContent = "";
+    $("revealWordWrap")?.classList.add("hidden");
+    if ($("revealWord")) $("revealWord").textContent = "";
   }
+
+  // reset role color class on open
+  $("revealRole")?.classList.remove("imposter");
 }
 
-$("revealTap").onclick = () => {
-  $("revealTap").classList.add("hidden");
-  $("revealInfo").classList.remove("hidden");
+const revealTapEl = $("revealTap");
+if (revealTapEl) {
+  revealTapEl.onclick = () => {
+    $("revealTap")?.classList.add("hidden");
+    $("revealInfo")?.classList.remove("hidden");
 
-  // color vibe
-  const r = lastRolePayload?.role;
-  $("revealRole").classList.toggle("imposter", r === "IMPOSTER");
-};
-
-
+    // color vibe
+    const r = lastRolePayload?.role;
+    if (r === "IMPOSTER") $("revealRole")?.classList.add("imposter");
+    else $("revealRole")?.classList.remove("imposter");
+  };
+}
 
 // Join/create actions
 $("btn-create").onclick = () => {
@@ -145,10 +156,13 @@ $("btn-leave").onclick = () => {
   if (currentRoom) socket.emit("room:leave", { roomCode: currentRoom, playerKey });
   currentRoom = null;
   lastState = null;
+
   $("players").innerHTML = "";
   $("order").innerHTML = "";
   $("voteTargets").innerHTML = "";
   $("votePanel").classList.add("hidden");
+
+  closeReveal();
   show("home");
 };
 
@@ -315,15 +329,30 @@ function render(state) {
 socket.on("room:update", (state) => {
   if (!state?.roomCode) return;
   if (currentRoom && state.roomCode !== currentRoom) return;
+
   currentRoom = state.roomCode;
   show("room");
   render(state);
+
+  // ✅ Role reveal ONCE per game: request role when we enter role phase the first time
+  if (state.phase === "role" && !requestedRoleThisGame) {
+    requestedRoleThisGame = true;
+    socket.emit("role:request", { roomCode: state.roomCode, playerKey }, () => {});
+  }
+
+  // Reset the "once per game" client flag when back to lobby
+  if (state.phase === "lobby") {
+    requestedRoleThisGame = false;
+    closeReveal();
+  }
 });
 
-// Among Us style role reveal on every role packet
+// Role packet opens the Among Us style overlay
 socket.on("game:role", ({ roomCode, role, word, round }) => {
   if (!currentRoom) return;
   if (roomCode && roomCode !== currentRoom) return;
+
+  // Only show if phase is role (or we have no state yet)
   if (lastState && lastState.phase !== "role") return;
 
   openReveal({ role, word, round });
