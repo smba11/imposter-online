@@ -1,6 +1,5 @@
 // public/client.js
-console.log("CLIENT VERSION: perfect spec loaded");
-
+console.log("CLIENT VERSION: FIXED-2026-02-26-A");
 const socket = io();
 const $ = (id) => document.getElementById(id);
 
