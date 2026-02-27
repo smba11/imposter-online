@@ -81,7 +81,9 @@ body{
   backdrop-filter: blur(10px);
 }
 
+/* IMPORTANT: must beat .reveal display:flex */
 .hidden{ display:none !important; }
+
 .grid{
   display:grid;
   gap:14px;
