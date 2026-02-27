@@ -3,6 +3,12 @@ console.log("CLIENT VERSION: perfect spec loaded");
 
 const socket = io();
 const $ = (id) => document.getElementById(id);
+
+// doesn’t crash the whole file if an element is missing
+function setText(id, text) {
+  const el = $(id);
+  if (el) el.textContent = text;
+}
 function closeReveal() {
   const overlay = document.getElementById("reveal");
   if (overlay) overlay.classList.add("hidden");
@@ -16,6 +22,14 @@ window.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape") closeReveal();
   });
 });
+
+  // ✅ Click outside the card to close (always gives an escape route)
+  const reveal = document.getElementById("reveal");
+  if (reveal) {
+    reveal.addEventListener("click", (e) => {
+      if (e.target === reveal) closeReveal();
+    });
+  }
 
 function phaseLabel(phase) {
   return (
@@ -42,14 +56,14 @@ let currentRoom = null;
 let lastState = null;
 let lastRolePayload = null;
 
-// Connection badge
 socket.on("connect", () => {
-  $("conn").textContent = "Online";
-  $("conn").classList.remove("bad");
+  setText("conn", "Online");
+  $("conn")?.classList.remove("bad");
 });
+
 socket.on("disconnect", () => {
-  $("conn").textContent = "Offline";
-  $("conn").classList.add("bad");
+  setText("conn", "Offline");
+  $("conn")?.classList.add("bad");
 });
 
 // Screens
@@ -309,7 +323,12 @@ socket.on("room:update", (state) => {
 
 // Among Us style role reveal on every role packet
 socket.on("game:role", ({ role, word, round }) => {
-  // Only show if we’re in game (not lobby)
+  // ✅ Don’t show role overlay unless we’re actually inside a room
+  if (!currentRoom) return;
+
+  // ✅ If we have a state packet, require the correct phase
+  if (lastState && lastState.phase !== "role") return;
+
   openReveal({ role, word, round });
 });
 
