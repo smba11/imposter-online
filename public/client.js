@@ -3,6 +3,19 @@ console.log("CLIENT VERSION: perfect spec loaded");
 
 const socket = io();
 const $ = (id) => document.getElementById(id);
+function closeReveal() {
+  const overlay = document.getElementById("reveal");
+  if (overlay) overlay.classList.add("hidden");
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("btn-closeReveal");
+  if (btn) btn.addEventListener("click", closeReveal);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeReveal();
+  });
+});
 
 function phaseLabel(phase) {
   return (
@@ -87,9 +100,7 @@ $("revealTap").onclick = () => {
   $("revealRole").classList.toggle("imposter", r === "IMPOSTER");
 };
 
-$("btn-closeReveal").onclick = () => {
-  $("reveal").classList.add("hidden");
-};
+
 
 // Join/create actions
 $("btn-create").onclick = () => {
