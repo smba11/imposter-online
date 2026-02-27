@@ -81,8 +81,7 @@ body{
   backdrop-filter: blur(10px);
 }
 
-.hidden{ display:none; }
-
+.hidden{ display:none !important; }
 .grid{
   display:grid;
   gap:14px;
