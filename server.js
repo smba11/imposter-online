@@ -17,9 +17,11 @@ app.use(express.static("public"));
  *   word: string|null,
  *   imposters: Set(playerKey),
  *   eliminated: Set(playerKey),
- *   order: string[],                 // fixed speaking order keys
- *   currentSpeakerKey: string|null,  // computed each round
+ *   order: string[],
+ *   currentSpeakerKey: string|null,
  *   votes: Map(voterKey -> targetKey|null), // null = skip
+ *   revealed: Set(playerKey),              // ✅ who has received role reveal this game
+ *   speakerIndex: number,                  // (reserved for later)
  *   players: Map(playerKey -> { key, name, socketId|null, connected:boolean })
  * }
  */
@@ -65,10 +67,6 @@ function isHost(room, playerKey) {
 
 function livingKeys(room) {
   return [...room.players.keys()].filter(k => !room.eliminated.has(k));
-}
-
-function livingPlayers(room) {
-  return [...room.players.values()].filter(p => !room.eliminated.has(p.key));
 }
 
 function livingCrewCount(room) {
@@ -151,18 +149,12 @@ function sendRoleToPlayer(roomCode, playerKey) {
   if (r.eliminated.has(playerKey)) return;
 
   const isImp = r.imposters.has(playerKey);
- io.to(p.socketId).emit("game:role", {
-  roomCode, // ✅ add this
-  role: isImp ? "IMPOSTER" : "CREW",
-  word: isImp ? null : r.word,
-  round: r.round
-});
-}
-
-function sendRolesToAll(roomCode) {
-  const r = rooms[roomCode];
-  if (!r) return;
-  for (const k of livingKeys(r)) sendRoleToPlayer(roomCode, k);
+  io.to(p.socketId).emit("game:role", {
+    roomCode,
+    role: isImp ? "IMPOSTER" : "CREW",
+    word: isImp ? null : r.word,
+    round: r.round
+  });
 }
 
 function startGame(roomCode) {
@@ -175,6 +167,12 @@ function startGame(roomCode) {
   r.word = pickRandom(WORDS);
   r.eliminated = new Set();
   r.votes = new Map();
+
+  // ✅ once-per-game role reveal tracking
+  r.revealed = new Set();
+
+  // (reserved for later)
+  r.speakerIndex = 0;
 
   // Fix speaking order once per game (randomized once)
   const allKeys = [...r.players.keys()];
@@ -190,8 +188,7 @@ function startGame(roomCode) {
   // Compute current speaker for round 1
   r.currentSpeakerKey = computeCurrentSpeaker(r);
 
-  // Send private roles (Among Us reveal UX is client-side)
-  sendRolesToAll(roomCode);
+  // ❌ DO NOT auto-send roles (client requests once during role phase)
   emitRoom(roomCode);
 }
 
@@ -273,8 +270,7 @@ function nextRound(roomCode) {
   r.votes = new Map();
   r.currentSpeakerKey = computeCurrentSpeaker(r);
 
-  // re-send roles each round (same roles) so everyone is aligned
-  sendRolesToAll(roomCode);
+  // ❌ Do not resend roles each round (roles are fixed; reveal only once per game)
   emitRoom(roomCode);
 }
 
@@ -301,6 +297,8 @@ io.on("connection", (socket) => {
         order: [],
         currentSpeakerKey: null,
         votes: new Map(),
+        revealed: new Set(),   // ✅
+        speakerIndex: 0,       // (reserved)
         players: new Map()
       };
 
@@ -326,11 +324,7 @@ io.on("connection", (socket) => {
       socket.join(code);
       emitRoom(code);
 
-     // ✅ only resend role if the game is currently in role-reveal phase
-if (r.phase === "role" && !r.eliminated.has(key)) {
-  sendRoleToPlayer(code, key);
-}
-
+      // ✅ Do NOT auto-send role on rejoin (once per game)
       return cb?.({ ok: true, roomCode: code, rejoined: true });
     }
 
@@ -341,6 +335,24 @@ if (r.phase === "role" && !r.eliminated.has(key)) {
     socket.join(code);
     emitRoom(code);
     cb?.({ ok: true, roomCode: code });
+  });
+
+  // ✅ Client requests its role during role phase (server enforces once-per-game)
+  socket.on("role:request", ({ roomCode, playerKey }, cb) => {
+    const code = String(roomCode || "").toUpperCase().trim();
+    const r = ensureRoom(code);
+    if (!r) return cb?.({ ok: false, error: "Room not found." });
+
+    if (!r.players.has(playerKey)) return cb?.({ ok: false, error: "Unknown player." });
+    if (r.phase !== "role") return cb?.({ ok: false, error: "Not role phase." });
+    if (r.eliminated.has(playerKey)) return cb?.({ ok: false, error: "Eliminated." });
+
+    if (!r.revealed) r.revealed = new Set();
+    if (r.revealed.has(playerKey)) return cb?.({ ok: true, already: true });
+
+    r.revealed.add(playerKey);
+    sendRoleToPlayer(code, playerKey);
+    cb?.({ ok: true });
   });
 
   socket.on("game:start", ({ roomCode, playerKey }, cb) => {
@@ -367,19 +379,12 @@ if (r.phase === "role" && !r.eliminated.has(key)) {
     // lobby not allowed mid-game (keep it simple)
     if (phase === "lobby" && r.phase !== "lobby") return cb?.({ ok: false, error: "Use End Game instead." });
 
-    if (phase === "role") {
-      r.phase = "role";
-      // re-send roles (same roles) so everyone can reveal again
-      sendRolesToAll(code);
-      emitRoom(code);
-      return cb?.({ ok: true });
-    }
-
     if (phase === "vote") {
       beginVoting(code);
       return cb?.({ ok: true });
     }
 
+    // role/discuss/results just set phase
     r.phase = phase;
     emitRoom(code);
     cb?.({ ok: true });
@@ -414,6 +419,9 @@ if (r.phase === "role" && !r.eliminated.has(key)) {
     r.order = [];
     r.currentSpeakerKey = null;
     r.votes = new Map();
+    r.revealed = new Set(); // ✅ reset for next game
+    r.speakerIndex = 0;
+
     emitRoom(code);
     cb?.({ ok: true });
   });
