@@ -19,9 +19,9 @@ app.use(express.static("public"));
  *   eliminated: Set(playerKey),
  *   order: string[],
  *   currentSpeakerKey: string|null,
+ *   speakerIndex: number,
  *   votes: Map(voterKey -> targetKey|null), // null = skip
- *   revealed: Set(playerKey),              // ✅ who has received role reveal this game
- *   speakerIndex: number,                  // (reserved for later)
+ *   revealed: Set(playerKey),              // who got role reveal this game
  *   players: Map(playerKey -> { key, name, socketId|null, connected:boolean })
  * }
  */
@@ -84,23 +84,31 @@ function livingImposterCount(room) {
 function checkWin(room) {
   const imp = livingImposterCount(room);
   const crew = livingCrewCount(room);
-  if (imp <= 0) return { over: true, winner: "CREW" };
-  if (imp >= crew) return { over: true, winner: "IMPOSTERS" };
-  return { over: false, winner: null };
+  if (imp <= 0) return { over: true, winner: "CREW", reason: "imposters_eliminated" };
+  if (imp >= crew) return { over: true, winner: "IMPOSTERS", reason: "imposters_majority" };
+  return { over: false, winner: null, reason: null };
 }
 
-// Fixed order, but current speaker rotates each round and skips eliminated
-function computeCurrentSpeaker(room) {
+function announce(roomCode, msg) {
+  io.to(roomCode).emit("game:announce", { msg, ts: Date.now() });
+}
+
+// speaker selection that respects order and alive players
+function computeSpeakerFromIndex(room) {
   const aliveSet = new Set(livingKeys(room));
-  if (room.order.length === 0) return null;
+  if (!room.order || room.order.length === 0) return null;
 
-  // rotate each round: offset = (round - 1)
-  const startIndex = (Math.max(1, room.round) - 1) % room.order.length;
+  // ensure index is in range
+  const base = ((room.speakerIndex || 0) % room.order.length + room.order.length) % room.order.length;
 
+  // find next alive starting from base
   for (let step = 0; step < room.order.length; step++) {
-    const idx = (startIndex + step) % room.order.length;
+    const idx = (base + step) % room.order.length;
     const key = room.order[idx];
-    if (aliveSet.has(key)) return key;
+    if (aliveSet.has(key)) {
+      room.speakerIndex = idx; // snap to actual alive spot
+      return key;
+    }
   }
   return null;
 }
@@ -124,11 +132,16 @@ function roomPublicState(roomCode) {
     phase: r.phase,
     round: r.round,
     hostKey: r.hostKey,
-    wordHint: r.phase === "lobby" ? null : "hidden", // never expose word
+    wordHint: r.phase === "lobby" ? null : "hidden",
     players: playersArr,
     order: r.order.map(k => {
       const p = r.players.get(k);
-      return { key: k, name: p ? p.name : "Unknown", eliminated: r.eliminated.has(k), connected: p ? p.connected : false };
+      return {
+        key: k,
+        name: p ? p.name : "Unknown",
+        eliminated: r.eliminated.has(k),
+        connected: p ? p.connected : false
+      };
     }),
     currentSpeakerKey: r.currentSpeakerKey,
     voteStatus: r.phase === "vote" ? { votedCount, total: alive.length } : null
@@ -149,6 +162,8 @@ function sendRoleToPlayer(roomCode, playerKey) {
   if (r.eliminated.has(playerKey)) return;
 
   const isImp = r.imposters.has(playerKey);
+
+  // ✅ B MODE: imposters do NOT know other imposters.
   io.to(p.socketId).emit("game:role", {
     roomCode,
     role: isImp ? "IMPOSTER" : "CREW",
@@ -161,62 +176,59 @@ function startGame(roomCode) {
   const r = rooms[roomCode];
   if (!r) return;
 
-  // Reset game
   r.round = 1;
   r.phase = "role";
   r.word = pickRandom(WORDS);
   r.eliminated = new Set();
   r.votes = new Map();
 
-  // ✅ once-per-game role reveal tracking
+  // once-per-game role reveal tracking
   r.revealed = new Set();
 
-  // (reserved for later)
-  r.speakerIndex = 0;
-
-  // Fix speaking order once per game (randomized once)
   const allKeys = [...r.players.keys()];
-  r.order = shuffle(allKeys);
 
-  // Assign imposters once per game (fixed roles)
+  // speaking order randomized once per game
+  r.order = shuffle(allKeys);
+  r.speakerIndex = 0;
+  r.currentSpeakerKey = computeSpeakerFromIndex(r);
+
+  // assign imposters once per game
   r.imposters = new Set();
-  const n = allKeys.length;
-  const impN = imposterCount(n);
+  const impN = imposterCount(allKeys.length);
   const shuffledForRoles = shuffle(allKeys);
   for (let i = 0; i < impN; i++) r.imposters.add(shuffledForRoles[i]);
 
-  // Compute current speaker for round 1
-  r.currentSpeakerKey = computeCurrentSpeaker(r);
-
-  // ❌ DO NOT auto-send roles (client requests once during role phase)
+  announce(roomCode, `Game started! Role reveal time. (Round 1)`);
   emitRoom(roomCode);
 }
 
 function beginVoting(roomCode) {
   const r = rooms[roomCode];
   if (!r) return;
+
   r.phase = "vote";
-  r.votes = new Map(); // clear previous votes
+  r.votes = new Map();
+
+  announce(roomCode, `Voting started — everyone alive must vote (or skip).`);
   emitRoom(roomCode);
 }
 
 function finishVoting(roomCode) {
   const r = rooms[roomCode];
-  if (!r) return;
-  if (r.phase !== "vote") return;
+  if (!r || r.phase !== "vote") return;
 
   const alive = livingKeys(r);
 
-  // REQUIRE everyone alive to have a vote recorded (vote or skip)
+  // require all alive votes recorded
   for (const k of alive) {
-    if (!r.votes.has(k)) return; // not done yet
+    if (!r.votes.has(k)) return;
   }
 
-  // tally votes (skip votes are null and are ignored)
+  // tally (skip votes are null)
   const tally = new Map(); // targetKey -> count
   for (const [voterKey, targetKey] of r.votes.entries()) {
     if (!alive.includes(voterKey)) continue;
-    if (targetKey === null) continue; // skip
+    if (targetKey === null) continue;
     if (!r.players.has(targetKey)) continue;
     if (r.eliminated.has(targetKey)) continue;
     tally.set(targetKey, (tally.get(targetKey) || 0) + 1);
@@ -247,6 +259,12 @@ function finishVoting(roomCode) {
         }
       : null;
 
+  if (eliminatedInfo) {
+    announce(roomCode, `${eliminatedInfo.name} was eliminated… they were ${eliminatedInfo.wasImposter ? "IMPOSTER" : "CREW"}.`);
+  } else {
+    announce(roomCode, `Tie / no elimination. Host can start next round.`);
+  }
+
   const win = checkWin(r);
 
   io.to(roomCode).emit("game:results", {
@@ -254,6 +272,21 @@ function finishVoting(roomCode) {
     tieOrNoElim: eliminatedInfo ? false : true,
     win: win.over ? { winner: win.winner } : null
   });
+
+  // Endgame reveal
+  if (win.over) {
+    const imposterNames = [...r.imposters].map(k => {
+      const p = r.players.get(k);
+      return { key: k, name: p ? p.name : "Unknown" };
+    });
+
+    announce(roomCode, `${win.winner} WIN! Revealing all imposters…`);
+    io.to(roomCode).emit("game:win", {
+      winner: win.winner, // "CREW" or "IMPOSTERS"
+      reason: win.reason,
+      imposters: imposterNames
+    });
+  }
 
   emitRoom(roomCode);
 }
@@ -266,11 +299,16 @@ function nextRound(roomCode) {
   if (win.over) return;
 
   r.round += 1;
-  r.phase = "role";
   r.votes = new Map();
-  r.currentSpeakerKey = computeCurrentSpeaker(r);
 
-  // ❌ Do not resend roles each round (roles are fixed; reveal only once per game)
+  // After round 1, role reveal is NOT shown again. So go straight to discussion.
+  r.phase = "discuss";
+
+  // reset speaker for the new round
+  r.speakerIndex = 0;
+  r.currentSpeakerKey = computeSpeakerFromIndex(r);
+
+  announce(roomCode, `Round ${r.round} started — discussion time.`);
   emitRoom(roomCode);
 }
 
@@ -296,9 +334,9 @@ io.on("connection", (socket) => {
         eliminated: new Set(),
         order: [],
         currentSpeakerKey: null,
+        speakerIndex: 0,
         votes: new Map(),
-        revealed: new Set(),   // ✅
-        speakerIndex: 0,       // (reserved)
+        revealed: new Set(),
         players: new Map()
       };
 
@@ -306,6 +344,7 @@ io.on("connection", (socket) => {
       r.players.set(key, { key, name: cleanName, socketId: socket.id, connected: true });
 
       socket.join(code);
+      announce(code, `Room created. Waiting in lobby.`);
       emitRoom(code);
       return cb?.({ ok: true, roomCode: code });
     }
@@ -314,7 +353,7 @@ io.on("connection", (socket) => {
     const r = ensureRoom(code);
     if (!r) return cb?.({ ok: false, error: "Room not found." });
 
-    // Rejoin (works mid-game)
+    // Rejoin
     if (r.players.has(key)) {
       const p = r.players.get(key);
       p.name = cleanName;
@@ -324,7 +363,7 @@ io.on("connection", (socket) => {
       socket.join(code);
       emitRoom(code);
 
-      // ✅ Do NOT auto-send role on rejoin (once per game)
+      // Do NOT auto-send role on rejoin (role reveal once per game)
       return cb?.({ ok: true, roomCode: code, rejoined: true });
     }
 
@@ -333,11 +372,12 @@ io.on("connection", (socket) => {
 
     r.players.set(key, { key, name: cleanName, socketId: socket.id, connected: true });
     socket.join(code);
+    announce(code, `${cleanName} joined the lobby.`);
     emitRoom(code);
     cb?.({ ok: true, roomCode: code });
   });
 
-  // ✅ Client requests its role during role phase (server enforces once-per-game)
+  // Client requests its role during role phase (server enforces once-per-game)
   socket.on("role:request", ({ roomCode, playerKey }, cb) => {
     const code = String(roomCode || "").toUpperCase().trim();
     const r = ensureRoom(code);
@@ -376,7 +416,7 @@ io.on("connection", (socket) => {
     const allowed = new Set(["lobby", "role", "discuss", "vote", "results"]);
     if (!allowed.has(phase)) return cb?.({ ok: false, error: "Bad phase." });
 
-    // lobby not allowed mid-game (keep it simple)
+    // lobby not allowed mid-game
     if (phase === "lobby" && r.phase !== "lobby") return cb?.({ ok: false, error: "Use End Game instead." });
 
     if (phase === "vote") {
@@ -384,18 +424,49 @@ io.on("connection", (socket) => {
       return cb?.({ ok: true });
     }
 
-    // role/discuss/results just set phase
     r.phase = phase;
+
+    if (phase === "discuss") {
+      // ensure speaker exists
+      if (!r.currentSpeakerKey) r.currentSpeakerKey = computeSpeakerFromIndex(r);
+      announce(code, `Discussion started — host controls speakers.`);
+    } else if (phase === "role") {
+      announce(code, `Role reveal phase.`);
+    } else if (phase === "results") {
+      announce(code, `Results phase.`);
+    }
+
     emitRoom(code);
     cb?.({ ok: true });
   });
 
+  // Host-only: advance to next speaker during discussion
+  socket.on("speaker:next", ({ roomCode, playerKey }, cb) => {
+    const code = String(roomCode || "").toUpperCase().trim();
+    const r = ensureRoom(code);
+    if (!r) return cb?.({ ok: false, error: "Room not found." });
+    if (!isHost(r, playerKey)) return cb?.({ ok: false, error: "Only host can control speakers." });
+    if (r.phase !== "discuss") return cb?.({ ok: false, error: "Not discussion phase." });
+    if (!r.order || r.order.length === 0) return cb?.({ ok: false, error: "No speaking order." });
+
+    // move index forward, then snap to next alive
+    r.speakerIndex = (r.speakerIndex + 1) % r.order.length;
+    r.currentSpeakerKey = computeSpeakerFromIndex(r);
+
+    const p = r.players.get(r.currentSpeakerKey);
+    announce(code, p ? `Now speaking: ${p.name}` : `Next speaker.`);
+    emitRoom(code);
+    cb?.({ ok: true });
+  });
+
+  // Next round — only from results (prevents weird skips)
   socket.on("round:next", ({ roomCode, playerKey }, cb) => {
     const code = String(roomCode || "").toUpperCase().trim();
     const r = ensureRoom(code);
     if (!r) return cb?.({ ok: false, error: "Room not found." });
     if (!isHost(r, playerKey)) return cb?.({ ok: false, error: "Only host can next round." });
     if (r.phase === "lobby") return cb?.({ ok: false, error: "Game not started." });
+    if (r.phase !== "results") return cb?.({ ok: false, error: "Next Round only works from Results." });
 
     const win = checkWin(r);
     if (win.over) return cb?.({ ok: false, error: "Game is over. End it." });
@@ -410,7 +481,6 @@ io.on("connection", (socket) => {
     if (!r) return cb?.({ ok: false, error: "Room not found." });
     if (!isHost(r, playerKey)) return cb?.({ ok: false, error: "Only host can end." });
 
-    // reset back to lobby but keep players
     r.phase = "lobby";
     r.round = 0;
     r.word = null;
@@ -418,10 +488,11 @@ io.on("connection", (socket) => {
     r.eliminated = new Set();
     r.order = [];
     r.currentSpeakerKey = null;
-    r.votes = new Map();
-    r.revealed = new Set(); // ✅ reset for next game
     r.speakerIndex = 0;
+    r.votes = new Map();
+    r.revealed = new Set();
 
+    announce(code, `Game ended — back to lobby.`);
     emitRoom(code);
     cb?.({ ok: true });
   });
@@ -438,7 +509,6 @@ io.on("connection", (socket) => {
 
     const alive = livingKeys(r);
 
-    // Interpret skip
     let target = null;
     if (String(targetKey) !== "SKIP") {
       if (!r.players.has(targetKey)) return cb?.({ ok: false, error: "Invalid target." });
@@ -449,14 +519,13 @@ io.on("connection", (socket) => {
 
     r.votes.set(playerKey, target);
 
-    // broadcast progress
     const votedCount = alive.filter(k => r.votes.has(k)).length;
     io.to(code).emit("vote:status", { votedCount, total: alive.length });
 
     emitRoom(code);
 
-    // Only proceed once EVERY alive player voted (including skip)
     if (votedCount === alive.length) {
+      announce(code, `All votes are in.`);
       finishVoting(code);
     }
 
@@ -473,10 +542,10 @@ io.on("connection", (socket) => {
       p.connected = false;
       p.socketId = null;
 
-      // If host leaves, promote first connected player (or anyone)
       if (r.hostKey === playerKey) {
         const connected = [...r.players.values()].filter(pp => pp.connected);
         r.hostKey = connected[0]?.key || [...r.players.values()][0]?.key || r.hostKey;
+        announce(code, `Host left — new host assigned.`);
       }
 
       emitRoom(code);
