@@ -481,7 +481,6 @@ socket.on("room:update", (state) => {
 
   show("room");
   render(state);
-});
 
   // Role reveal ONCE per game: request role the first time we ever enter role phase.
   if (state.phase === "role" && !requestedRoleThisGame && !gameOver) {
