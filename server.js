@@ -537,6 +537,8 @@ io.on("connection", (socket) => {
     const r = ensureRoom(code);
     if (!r) return;
 
+      socket.leave(code); // ✅ stop receiving room broadcasts
+
     if (r.players.has(playerKey)) {
       const p = r.players.get(playerKey);
       p.connected = false;
