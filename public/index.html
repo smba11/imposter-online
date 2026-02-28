@@ -67,6 +67,7 @@
           <div id="room-msg" class="msg"></div>
         </div>
         <div class="phaseRight">
+          <button id="btn-nextSpeaker" class="btn small hidden">Next Speaker</button>
           <button id="btn-host" class="btn primary hidden">Host Action</button>
           <button id="btn-end" class="btn danger hidden">End Game</button>
         </div>
@@ -112,6 +113,20 @@
         </div>
         <button id="btn-closeReveal" class="btn primary">Back</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ENDGAME OVERLAY -->
+  <div id="endgame" class="endgame hidden">
+    <canvas id="confettiCanvas" class="confettiCanvas"></canvas>
+    <div class="endgameCard">
+      <div id="endTitle" class="endTitle">CREW WIN!</div>
+      <div class="endSub">Imposters revealed:</div>
+      <div id="endImposters" class="endImposters">—</div>
+      <div class="endBtns">
+        <button id="btn-closeEnd" class="btn primary">Close</button>
+      </div>
+      <div class="endHint">Host can click “End Game” to go back to lobby and start a new one.</div>
     </div>
   </div>
 
