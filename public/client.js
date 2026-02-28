@@ -472,11 +472,16 @@ function render(state) {
 // ===== SOCKET EVENTS =====
 socket.on("room:update", (state) => {
   if (!state?.roomCode) return;
-  if (currentRoom && state.roomCode !== currentRoom) return;
 
-  currentRoom = state.roomCode;
+  // ✅ If you clicked Leave, currentRoom becomes null — ignore pushes
+  if (!currentRoom) return;
+
+  // ✅ Only accept updates for the room you’re still in
+  if (state.roomCode !== currentRoom) return;
+
   show("room");
   render(state);
+});
 
   // Role reveal ONCE per game: request role the first time we ever enter role phase.
   if (state.phase === "role" && !requestedRoleThisGame && !gameOver) {
